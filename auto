@@ -1,0 +1,494 @@
+--// Alexchad Library (caller must have this library available)
+local AlexchadLibrary = loadstring(game:HttpGet("https://raw.githubusercontent.com/Alexchad-source/Alexchad-Hub/refs/heads/main/MaybeAlexchadlib.lua"))()
+
+local Window = AlexchadLibrary:CreateWindow({
+    Name = "Auto JJ's",
+    Subtitle = "@fp3 no Discord",
+    Version = "v1.0",
+    LoadingTitle = "Auto JJ's",
+    LoadingSubtitle = "Carregando...",
+    Theme = "Dark",
+    AnimationSpeed = 0.2,
+    RippleEnabled = true,
+    RippleSpeed = 0.35,
+    CornerRadius = 12,
+    ElementCornerRadius = 10,
+    BlurEnabled = true,
+    ConfigurationSaving = {Enabled = false},
+    ToggleKey = Enum.KeyCode.RightShift
+})
+
+--=============================================================
+-- SISTEMA GLOBAL DE DESLIGAMENTO
+--=============================================================
+
+local connections = {}
+
+local function disconnectAll()
+    running = false
+    for _, c in ipairs(connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    table.clear(connections)
+end
+
+local originalClose = Window.Close
+Window.Close = function(...)
+    disconnectAll()
+    return originalClose(Window, ...)
+end
+
+--=============================================================
+-- INTERFACE
+--=============================================================
+
+local Tab = Window:CreateTab({ Name = "Auto JJ's", Icon = "🦘" })
+local Section = Tab:CreateSection("Configurações")
+
+--=============================================================
+-- VARIÁVEIS
+--=============================================================
+
+local inicial = 1
+local final = 100
+local sufixo = "!"
+local espaco = false
+local pular = false
+
+local modoTempo = "Variável"
+local tempoFixo = 1
+local tempoMin = 1.5
+local tempoMax = 2
+
+local running = false
+local current = inicial
+local nextSend = 0
+local runToken = 0
+
+local TextChatService = game:GetService("TextChatService")
+local TextChannel = nil
+pcall(function()
+    TextChannel = TextChatService.TextChannels and TextChatService.TextChannels.RBXGeneral or nil
+end)
+
+--=============================================================
+-- DROPDOWN
+--=============================================================
+
+Section:CreateDropdown({
+    Name = "Tipo de JJ",
+    Options = {"JJ (padrão)"},
+    CurrentOption = "JJ (padrão)",
+    Callback = function(option) end
+})
+
+--=============================================================
+-- INPUTS
+--=============================================================
+
+Section:CreateInput({
+    Name = "Número inicial",
+    PlaceholderText = "1",
+    Callback = function(t)
+        local n = tonumber(t:match("(-?%d+)") or "")
+        if type(n) == "number" and n >= 0 then
+            inicial = n
+        else
+            inicial = 1
+        end
+        if not running then
+            current = inicial
+            updateStatus()
+        end
+    end
+})
+
+Section:CreateInput({
+    Name = "Número final",
+    PlaceholderText = "100",
+    Callback = function(t)
+        local n = tonumber(t)
+        if type(n) == "number" then
+            final = n
+        end
+    end
+})
+
+Section:CreateInput({
+    Name = "Sufixo",
+    PlaceholderText = "!",
+    Callback = function(t)
+        sufixo = t or ""
+    end
+})
+
+Section:CreateToggle({
+    Name = "Espaçar sufixo",
+    CurrentValue = espaco,
+    Callback = function(v)
+        espaco = v
+    end
+})
+
+Section:CreateToggle({
+    Name = "Pular após enviar",
+    CurrentValue = pular,
+    Callback = function(v)
+        pular = v
+    end
+})
+
+--=============================================================
+-- TEMPO
+--=============================================================
+
+Section:CreateDropdown({
+    Name = "Modo de tempo",
+    Options = {"Fixo", "Variável"},
+    CurrentOption = "Variável",
+    Callback = function(t)
+        modoTempo = t
+    end
+})
+
+Section:CreateInput({
+    Name = "Tempo fixo (segundos)",
+    PlaceholderText = "1",
+    Callback = function(t)
+        local n = tonumber(t)
+        if type(n) == "number" and n > 0 then
+            tempoFixo = n
+        end
+    end
+})
+
+Section:CreateSlider({
+    Name = "Tempo mínimo",
+    Range = {0.2, 10},
+    Increment = 0.1,
+    CurrentValue = tempoMin,
+    Suffix = "s",
+    Callback = function(v)
+        tempoMin = v
+    end
+})
+
+Section:CreateSlider({
+    Name = "Tempo máximo",
+    Range = {0.2, 10},
+    Increment = 0.1,
+    CurrentValue = tempoMax,
+    Suffix = "s",
+    Callback = function(v)
+        tempoMax = v
+    end
+})
+
+--=============================================================
+-- STATUS
+--=============================================================
+
+local StatusSec = Tab:CreateSection("Status")
+local LabelNumero = StatusSec:CreateLabel("Número atual: " .. tostring(current))
+local LabelTempo = StatusSec:CreateLabel("Próximo envio: 0s")
+
+function updateStatus()
+    LabelNumero:Set("Número atual: " .. tostring(current - 1))
+    LabelTempo:Set("Próximo envio: " .. string.format("%.2f", math.max(0, nextSend - os.clock())) .. "s")
+end
+
+--=============================================================
+-- EXTENSO
+--=============================================================
+
+local function upperUTF8(txt)
+    if not txt then return "" end
+    return (txt
+        :gsub("á","Á"):gsub("à","À"):gsub("ã","Ã"):gsub("â","Â")
+        :gsub("é","É"):gsub("ê","Ê")
+        :gsub("í","Í")
+        :gsub("ó","Ó"):gsub("õ","Õ"):gsub("ô","Ô")
+        :gsub("ú","Ú")
+        :gsub("ç","Ç")
+    ):upper()
+end
+
+local unidades = {
+    "zero","um","dois","três","quatro","cinco","seis","sete","oito","nove"
+}
+local especiais = {
+    [10]="dez",[11]="onze",[12]="doze",[13]="treze",[14]="quatorze",
+    [15]="quinze",[16]="dezesseis",[17]="dezessete",[18]="dezoito",[19]="dezenove"
+}
+local dezenas = {
+    [2]="vinte",[3]="trinta",[4]="quarenta",[5]="cinquenta",
+    [6]="sessenta",[7]="setenta",[8]="oitenta",[9]="noventa"
+}
+local centenas = {
+    [1]="cento",[2]="duzentos",[3]="trezentos",[4]="quatrocentos",
+    [5]="quinhentos",[6]="seiscentos",[7]="setecentos",
+    [8]="oitocentos",[9]="novecentos"
+}
+
+local function bloco(n)
+    if n == 0 then return "" end
+    if n < 10 then return unidades[n] end
+    if n == 100 then return "cem" end
+
+    local c = math.floor(n/100)
+    local d = math.floor((n%100)/10)
+    local u = n % 10
+
+    local partes = {}
+
+    if c > 0 then
+        table.insert(partes, centenas[c])
+    end
+
+    if d == 1 then
+        table.insert(partes, especiais[10 + u])
+    else
+        if d > 1 then table.insert(partes, dezenas[d]) end
+        if u > 0 then table.insert(partes, unidades[u]) end
+    end
+
+    return table.concat(partes, " e ")
+end
+
+local function numeroPorExtenso(n)
+    n = tonumber(n)
+    if not n or n < 0 then return "" end
+    if n < 10 then return upperUTF8(unidades[n]) end
+
+    local partes = {}
+    local resto = n
+
+    local grupos = {
+        {1e12,"trilhão","trilhões"},
+        {1e9,"bilhão","bilhões"},
+        {1e6,"milhão","milhões"},
+        {1e3,"mil","mil"},
+    }
+
+    for _, g in ipairs(grupos) do
+        local q = math.floor(resto / g[1])
+        if q > 0 then
+            local txt = bloco(q)
+            table.insert(partes, q == 1 and txt.." "..g[2] or txt.." "..g[3])
+            resto = resto % g[1]
+        end
+    end
+
+    if resto > 0 then
+        table.insert(partes, bloco(resto))
+    end
+
+    if #partes == 0 then
+        partes = {unidades[n]}
+    end
+
+    return upperUTF8(table.concat(partes, " e "))
+end
+
+--=============================================================
+-- ENVIO
+--=============================================================
+
+local function safeSendAsyncTry(text)
+    if TextChannel and typeof(TextChannel.SendAsync) == "function" then
+        if pcall(function() TextChannel:SendAsync(text) end) then return true end
+    end
+    if typeof(TextChatService.SendSystemMessage) == "function" then
+        if pcall(function() TextChatService:SendSystemMessage(text) end) then return true end
+    end
+    local StarterGui = game:GetService("StarterGui")
+    if StarterGui then
+        if pcall(function()
+            StarterGui:SetCore("ChatMakeSystemMessage",{Text=text})
+        end) then return true end
+    end
+    return false
+end
+
+local function enviarMensagemNumero(num)
+    local texto = numeroPorExtenso(num)
+    if texto == "" then return false end
+
+    if espaco and sufixo ~= "" then
+        texto = texto .. " " .. sufixo
+    else
+        texto = texto .. sufixo
+    end
+
+    for _ = 1, 3 do
+        if not running then break end
+        if safeSendAsyncTry(texto) then break end
+        task.wait(0.12)
+    end
+
+    if pular then
+        local hum = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            pcall(function()
+                hum:ChangeState(Enum.HumanoidStateType.Jumping)
+            end)
+        end
+    end
+
+    return true
+end
+
+--=============================================================
+-- INTERVALO
+--=============================================================
+
+local function calcularProximoIntervalo()
+    if modoTempo == "Fixo" then return tempoFixo end
+    return tempoMin + math.random() * math.max(0, tempoMax - tempoMin)
+end
+
+--=============================================================
+-- LOOP
+--=============================================================
+
+local function startAuto()
+    runToken += 1
+    local myToken = runToken
+
+    if not current or not running then current = inicial end
+    running = true
+
+    task.spawn(function()
+        while running and runToken == myToken and current <= final do
+            enviarMensagemNumero(current)
+            updateStatus()
+
+            local intervalo = calcularProximoIntervalo()
+            nextSend = os.clock() + intervalo
+
+            while running and runToken == myToken and os.clock() < nextSend do
+                updateStatus()
+                task.wait(0.05)
+            end
+
+            current += 1
+        end
+
+        running = false
+    end)
+end
+
+local function stopAuto()
+    running = false
+    runToken += 1
+end
+
+--=============================================================
+-- BOTÕES
+--=============================================================
+
+Section:CreateButton({
+    Name = "INICIAR",
+    Callback = function()
+        if running then return end
+        current = inicial
+        startAuto()
+    end
+})
+
+Section:CreateButton({
+    Name = "PARAR",
+    Callback = function()
+        stopAuto()
+    end
+})
+
+--=============================================================
+-- KEYBINDS
+--=============================================================
+
+local UIS = game:GetService("UserInputService")
+table.insert(connections,
+    UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+
+        if input.KeyCode == Enum.KeyCode.F4 then
+            if not running then
+                current = inicial
+                startAuto()
+            end
+
+        elseif input.KeyCode == Enum.KeyCode.F5 then
+            stopAuto()
+        end
+    end)
+)
+
+--=============================================================
+-- PATCH: Drag + Tamanho + Minimizar + Fechar
+--=============================================================
+
+task.wait(0.5)
+
+local gui = game.CoreGui:FindFirstChild("AlexchadLibrary_UI") or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("AlexchadLibrary_UI")
+if gui then
+    local mainFrame = gui:FindFirstChild("MainFrame", true)
+    local closeBtn = gui:FindFirstChild("CloseButton", true)
+    local minimizeBtn = gui:FindFirstChild("MinimizeButton", true)
+
+    if mainFrame then
+        pcall(function()
+            mainFrame.Size = UDim2.new(0, 520, 0, 410)
+        end)
+
+        -- DRAG
+        local UIS = game:GetService("UserInputService")
+        local dragging = false
+        local dragStart, startPos
+
+        mainFrame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or
+               input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = mainFrame.Position
+            end
+        end)
+
+        mainFrame.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or
+               input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+
+        UIS.InputChanged:Connect(function(input)
+            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement or
+                input.UserInputType == Enum.UserInputType.Touch then
+                local delta = input.Position - dragStart
+                mainFrame.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + delta.X,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+
+        -- CLOSE (X)
+        if closeBtn then
+            closeBtn.MouseButton1Click:Connect(function()
+                stopAuto()
+                disconnectAll()
+                gui:Destroy()
+            end)
+        end
+
+        -- MINIMIZAR (–)
+        local minimized = false
+        if minimizeBtn then
+            minimizeBtn.MouseButton1Click:Connect(function()
+                minimized = not minimized
+                mainFrame.Visible = not minimized
+            end)
+        end
+    end
+end
